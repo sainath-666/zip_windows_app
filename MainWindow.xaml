@@ -27,15 +27,12 @@
 
         <!-- Buttons -->
         <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,15">
-            <Button x:Name="SelectFolderButton" Content="Select Folder" 
-                    Width="120" Height="35" Margin="0,0,10,0"
+            <Button x:Name="SelectFolderButton" Content="Select Folder to Zip" 
+                    Width="150" Height="35" Margin="0,0,10,0"
                     Click="SelectFolderButton_Click"/>
-            <Button x:Name="StartZipButton" Content="Start Zip" 
-                    Width="120" Height="35" Margin="0,0,10,0"
+            <Button x:Name="StartZipButton" Content="Start Bottom-Up Zip" 
+                    Width="150" Height="35" Margin="0,0,10,0"
                     Click="StartZipButton_Click" IsEnabled="False"/>
-            <CheckBox x:Name="ZipRootFolderCheckBox" Content="Zip Root Folder" 
-                      VerticalAlignment="Center" IsChecked="True"
-                      ToolTip="If checked, the selected root folder will also be zipped"/>
         </StackPanel>
 
         <!-- Status -->

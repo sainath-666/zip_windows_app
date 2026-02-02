@@ -20,87 +20,104 @@ namespace BottomUpZipper
         /// Zips a folder and all its subfolders in a bottom-up manner
         /// </summary>
         /// <param name="rootFolderPath">The root folder to start zipping from</param>
-        /// <param name="zipRootFolder">Whether to zip the root folder itself</param>
-        public void ZipFolderBottomUp(string rootFolderPath, bool zipRootFolder)
+        /// <param name="outputZipPath">The path where the final zip file will be saved</param>
+        public void ZipFolderBottomUp(string rootFolderPath, string outputZipPath)
         {
             if (string.IsNullOrEmpty(rootFolderPath) || !Directory.Exists(rootFolderPath))
             {
                 throw new ArgumentException("Invalid folder path", nameof(rootFolderPath));
             }
 
-            RaiseStatusChanged("Scanning folders...");
+            RaiseStatusChanged("Creating temporary working directory...");
             RaiseLogMessage($"Starting scan of: {rootFolderPath}");
 
-            // Get all subdirectories recursively
-            List<DirectoryInfo> allDirectories = GetAllSubdirectoriesRecursive(rootFolderPath);
+            // Create a temporary directory to build the zip structure
+            string tempDir = Path.Combine(Path.GetTempPath(), "BottomUpZip_" + Guid.NewGuid().ToString());
+            Directory.CreateDirectory(tempDir);
 
-            // Sort by depth (deepest first)
-            var sortedDirectories = allDirectories
-                .OrderByDescending(d => GetFolderDepth(d.FullName, rootFolderPath))
-                .ToList();
-
-            RaiseLogMessage($"Found {sortedDirectories.Count} subdirectories to process");
-
-            // Process each directory from deepest to shallowest
-            int totalFolders = sortedDirectories.Count;
-            int processedFolders = 0;
-
-            foreach (var directory in sortedDirectories)
+            try
             {
-                try
+                // Copy the entire folder structure to temp directory
+                RaiseStatusChanged("Copying folder structure...");
+                string tempRoot = Path.Combine(tempDir, new DirectoryInfo(rootFolderPath).Name);
+                CopyDirectory(rootFolderPath, tempRoot);
+
+                // Get all subdirectories recursively from temp directory
+                List<DirectoryInfo> allDirectories = GetAllSubdirectoriesRecursive(tempRoot);
+
+                // Sort by depth (deepest first)
+                var sortedDirectories = allDirectories
+                    .OrderByDescending(d => GetFolderDepth(d.FullName, tempRoot))
+                    .ToList();
+
+                RaiseLogMessage($"Found {sortedDirectories.Count} subdirectories to process");
+
+                // Process each directory from deepest to shallowest
+                int totalFolders = sortedDirectories.Count + 1; // +1 for root
+                int processedFolders = 0;
+
+                foreach (var directory in sortedDirectories)
                 {
-                    // Skip if directory no longer exists (might have been deleted as part of parent)
-                    if (!directory.Exists)
+                    try
                     {
-                        continue;
+                        // Skip if directory no longer exists
+                        if (!directory.Exists)
+                        {
+                            continue;
+                        }
+
+                        string folderName = directory.Name;
+                        string parentPath = directory.Parent?.FullName ?? string.Empty;
+                        string zipFilePath = Path.Combine(parentPath, $"{folderName}.zip");
+
+                        RaiseOperationChanged($"Zipping: {directory.Name}");
+                        RaiseLogMessage($"Processing: {directory.Name}");
+
+                        // Zip the folder
+                        ZipFolder(directory.FullName, zipFilePath);
+
+                        // Delete the folder after zipping
+                        DeleteFolder(directory.FullName);
+
+                        processedFolders++;
+                        RaiseProgressChanged(processedFolders, totalFolders);
+
+                        RaiseLogMessage($"✓ Completed: {folderName}.zip");
                     }
-
-                    string folderName = directory.Name;
-                    string parentPath = directory.Parent?.FullName ?? string.Empty;
-                    string zipFilePath = Path.Combine(parentPath, $"{folderName}.zip");
-
-                    RaiseOperationChanged($"Zipping: {directory.FullName}");
-                    RaiseLogMessage($"Processing: {directory.FullName}");
-
-                    // Zip the folder
-                    ZipFolder(directory.FullName, zipFilePath);
-
-                    // Delete the original folder after successful zipping
-                    DeleteFolder(directory.FullName);
-
-                    processedFolders++;
-                    RaiseProgressChanged(processedFolders, totalFolders);
-
-                    RaiseLogMessage($"✓ Completed: {folderName}.zip");
+                    catch (Exception ex)
+                    {
+                        RaiseLogMessage($"✗ Error processing {directory.FullName}: {ex.Message}");
+                    }
                 }
-                catch (Exception ex)
+
+                // Finally zip the root folder
+                RaiseOperationChanged($"Creating final zip file...");
+                RaiseLogMessage($"Creating final output: {outputZipPath}");
+
+                // Delete existing output file if it exists
+                if (File.Exists(outputZipPath))
                 {
-                    RaiseLogMessage($"✗ Error processing {directory.FullName}: {ex.Message}");
-                    // Continue with other folders even if one fails
+                    File.Delete(outputZipPath);
                 }
-            }
 
-            // Optionally zip the root folder itself
-            if (zipRootFolder)
+                ZipFolder(tempRoot, outputZipPath);
+                processedFolders++;
+                RaiseProgressChanged(processedFolders, totalFolders);
+                RaiseLogMessage($"✓ Final zip created: {Path.GetFileName(outputZipPath)}");
+            }
+            finally
             {
+                // Clean up temp directory
                 try
                 {
-                    DirectoryInfo rootDir = new DirectoryInfo(rootFolderPath);
-                    string rootParentPath = rootDir.Parent?.FullName ?? Path.GetDirectoryName(rootFolderPath) ?? string.Empty;
-                    string rootZipPath = Path.Combine(rootParentPath, $"{rootDir.Name}.zip");
-
-                    RaiseOperationChanged($"Zipping root folder: {rootFolderPath}");
-                    RaiseLogMessage($"Zipping root folder: {rootFolderPath}");
-
-                    ZipFolder(rootFolderPath, rootZipPath);
-                    DeleteFolder(rootFolderPath);
-
-                    RaiseLogMessage($"✓ Root folder zipped: {rootDir.Name}.zip");
+                    if (Directory.Exists(tempDir))
+                    {
+                        Directory.Delete(tempDir, true);
+                    }
                 }
                 catch (Exception ex)
                 {
-                    RaiseLogMessage($"✗ Error zipping root folder: {ex.Message}");
-                    throw;
+                    RaiseLogMessage($"⚠ Could not delete temp directory: {ex.Message}");
                 }
             }
 
@@ -199,6 +216,30 @@ namespace BottomUpZipper
             if (Directory.Exists(folderPath))
             {
                 Directory.Delete(folderPath, recursive: true);
+            }
+        }
+
+        /// <summary>
+        /// Copies a directory and all its contents recursively
+        /// </summary>
+        private void CopyDirectory(string sourceDir, string targetDir)
+        {
+            Directory.CreateDirectory(targetDir);
+
+            // Copy all files
+            foreach (string file in Directory.GetFiles(sourceDir))
+            {
+                string fileName = Path.GetFileName(file);
+                string destFile = Path.Combine(targetDir, fileName);
+                File.Copy(file, destFile, true);
+            }
+
+            // Copy all subdirectories
+            foreach (string subDir in Directory.GetDirectories(sourceDir))
+            {
+                string dirName = Path.GetFileName(subDir);
+                string destSubDir = Path.Combine(targetDir, dirName);
+                CopyDirectory(subDir, destSubDir);
             }
         }
 

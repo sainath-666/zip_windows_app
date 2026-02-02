@@ -9,6 +9,7 @@ namespace BottomUpZipper
     public partial class MainWindow : Window
     {
         private string? selectedFolderPath;
+        private string? outputZipPath;
         private readonly ZipService zipService;
 
         public MainWindow()
@@ -56,17 +57,19 @@ namespace BottomUpZipper
                 return;
             }
 
-            // Confirm action
-            var result = System.Windows.MessageBox.Show(
-                "This will zip all subfolders from deepest to shallowest and DELETE the original folders after zipping.\n\n" +
-                "Are you sure you want to continue?",
-                "Confirm Operation",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-
-            if (result != MessageBoxResult.Yes)
+            // Ask user where to save the output zip file
+            using (var saveDialog = new SaveFileDialog())
             {
-                return;
+                saveDialog.Filter = "Zip files (*.zip)|*.zip";
+                saveDialog.Title = "Save Zipped Folder As";
+                saveDialog.FileName = new DirectoryInfo(selectedFolderPath).Name + ".zip";
+                
+                if (saveDialog.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+                {
+                    return;
+                }
+                
+                outputZipPath = saveDialog.FileName;
             }
 
             // Disable buttons during operation
@@ -77,10 +80,9 @@ namespace BottomUpZipper
             {
                 UpdateStatus("Starting bottom-up zipping process...");
                 LogMessage("=== Starting zipping operation ===");
+                LogMessage($"Output will be saved to: {outputZipPath}");
 
-                bool zipRoot = ZipRootFolderCheckBox.IsChecked ?? false;
-
-                await Task.Run(() => zipService.ZipFolderBottomUp(selectedFolderPath, zipRoot));
+                await Task.Run(() => zipService.ZipFolderBottomUp(selectedFolderPath, outputZipPath));
 
                 UpdateStatus("✓ Zipping completed successfully!");
                 LogMessage("=== Operation completed successfully ===");
