@@ -28,61 +28,55 @@ namespace BottomUpZipper
                 throw new ArgumentException("Invalid folder path", nameof(rootFolderPath));
             }
 
-            RaiseStatusChanged("Creating temporary working directory...");
+            RaiseStatusChanged("Scanning folder structure...");
             RaiseLogMessage($"Starting scan of: {rootFolderPath}");
 
-            // Create a temporary directory to build the zip structure
+            // Create a temporary directory (much smaller - only for intermediate zips)
             string tempDir = Path.Combine(Path.GetTempPath(), "BottomUpZip_" + Guid.NewGuid().ToString());
             Directory.CreateDirectory(tempDir);
 
             try
             {
-                // Copy the entire folder structure to temp directory
-                RaiseStatusChanged("Copying folder structure...");
-                string tempRoot = Path.Combine(tempDir, new DirectoryInfo(rootFolderPath).Name);
-                CopyDirectory(rootFolderPath, tempRoot);
-
-                // Get all subdirectories recursively from temp directory
-                List<DirectoryInfo> allDirectories = GetAllSubdirectoriesRecursive(tempRoot);
+                // Get all subdirectories from SOURCE (no copying)
+                RaiseStatusChanged("Analyzing folder structure...");
+                List<DirectoryInfo> allDirectories = GetAllSubdirectoriesRecursive(rootFolderPath);
 
                 // Sort by depth (deepest first)
                 var sortedDirectories = allDirectories
-                    .OrderByDescending(d => GetFolderDepth(d.FullName, tempRoot))
+                    .OrderByDescending(d => GetFolderDepth(d.FullName, rootFolderPath))
                     .ToList();
 
                 RaiseLogMessage($"Found {sortedDirectories.Count} subdirectories to process");
+
+                // Create a mapping of source paths to their temp zip paths
+                Dictionary<string, string> folderToZipMap = new Dictionary<string, string>();
 
                 // Process each directory from deepest to shallowest
                 int totalFolders = sortedDirectories.Count + 1; // +1 for root
                 int processedFolders = 0;
 
+                RaiseStatusChanged("Creating bottom-up zip structure...");
+
                 foreach (var directory in sortedDirectories)
                 {
                     try
                     {
-                        // Skip if directory no longer exists
-                        if (!directory.Exists)
-                        {
-                            continue;
-                        }
-
                         string folderName = directory.Name;
-                        string parentPath = directory.Parent?.FullName ?? string.Empty;
-                        string zipFilePath = Path.Combine(parentPath, $"{folderName}.zip");
+                        string tempZipPath = Path.Combine(tempDir, Guid.NewGuid().ToString() + ".zip");
 
                         RaiseOperationChanged($"Zipping: {directory.Name}");
                         RaiseLogMessage($"Processing: {directory.Name}");
 
-                        // Zip the folder
-                        ZipFolder(directory.FullName, zipFilePath);
+                        // Zip this folder directly from source, including any child zips we created
+                        ZipFolderWithChildZips(directory.FullName, tempZipPath, folderToZipMap);
 
-                        // Delete the folder after zipping
-                        DeleteFolder(directory.FullName);
+                        // Map this folder to its zip
+                        folderToZipMap[directory.FullName] = tempZipPath;
 
                         processedFolders++;
                         RaiseProgressChanged(processedFolders, totalFolders);
 
-                        RaiseLogMessage($"✓ Completed: {folderName}.zip");
+                        RaiseLogMessage($"✓ Completed: {folderName}");
                     }
                     catch (Exception ex)
                     {
@@ -90,17 +84,16 @@ namespace BottomUpZipper
                     }
                 }
 
-                // Finally zip the root folder
+                // Finally create the root zip with all child zips
                 RaiseOperationChanged($"Creating final zip file...");
                 RaiseLogMessage($"Creating final output: {outputZipPath}");
 
-                // Delete existing output file if it exists
                 if (File.Exists(outputZipPath))
                 {
                     File.Delete(outputZipPath);
                 }
 
-                ZipFolder(tempRoot, outputZipPath);
+                ZipFolderWithChildZips(rootFolderPath, outputZipPath, folderToZipMap);
                 processedFolders++;
                 RaiseProgressChanged(processedFolders, totalFolders);
                 RaiseLogMessage($"✓ Final zip created: {Path.GetFileName(outputZipPath)}");
@@ -188,24 +181,70 @@ namespace BottomUpZipper
         }
 
         /// <summary>
-        /// Zips a folder to a specified zip file path
+        /// Zips a folder including files and child zips from the mapping
         /// </summary>
-        private void ZipFolder(string sourceFolderPath, string zipFilePath)
+        private void ZipFolderWithChildZips(string sourceFolderPath, string zipFilePath, Dictionary<string, string> folderToZipMap)
         {
-            // Delete existing zip file if it exists
             if (File.Exists(zipFilePath))
             {
-                RaiseLogMessage($"⚠ Overwriting existing zip: {zipFilePath}");
                 File.Delete(zipFilePath);
             }
 
-            // Create the zip file
-            ZipFile.CreateFromDirectory(
-                sourceFolderPath,
-                zipFilePath,
-                CompressionLevel.Optimal,
-                includeBaseDirectory: false
-            );
+            using (FileStream zipStream = new FileStream(zipFilePath, FileMode.Create))
+            using (ZipArchive archive = new ZipArchive(zipStream, ZipArchiveMode.Create))
+            {
+                // Add all files in this directory
+                foreach (string filePath in Directory.GetFiles(sourceFolderPath))
+                {
+                    string fileName = Path.GetFileName(filePath);
+                    archive.CreateEntryFromFile(filePath, fileName, CompressionLevel.Optimal);
+                }
+
+                // Add child folders as zip files (if they were already zipped)
+                foreach (string subDirPath in Directory.GetDirectories(sourceFolderPath))
+                {
+                    string subDirName = Path.GetFileName(subDirPath);
+                    
+                    // Check if we already zipped this subfolder
+                    if (folderToZipMap.ContainsKey(subDirPath))
+                    {
+                        // Add the zip file instead of the folder
+                        string childZipPath = folderToZipMap[subDirPath];
+                        if (File.Exists(childZipPath))
+                        {
+                            archive.CreateEntryFromFile(childZipPath, $"{subDirName}.zip", CompressionLevel.Optimal);
+                        }
+                    }
+                    else
+                    {
+                        // This subfolder wasn't processed (shouldn't happen in bottom-up, but handle it)
+                        // Add files from this subdirectory directly
+                        AddDirectoryToArchive(archive, subDirPath, subDirName);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Recursively adds a directory and its contents to a zip archive
+        /// </summary>
+        private void AddDirectoryToArchive(ZipArchive archive, string sourcePath, string entryPrefix)
+        {
+            // Add all files
+            foreach (string filePath in Directory.GetFiles(sourcePath))
+            {
+                string fileName = Path.GetFileName(filePath);
+                string entryName = Path.Combine(entryPrefix, fileName).Replace('\\', '/');
+                archive.CreateEntryFromFile(filePath, entryName, CompressionLevel.Optimal);
+            }
+
+            // Add all subdirectories
+            foreach (string subDirPath in Directory.GetDirectories(sourcePath))
+            {
+                string subDirName = Path.GetFileName(subDirPath);
+                string newPrefix = Path.Combine(entryPrefix, subDirName);
+                AddDirectoryToArchive(archive, subDirPath, newPrefix);
+            }
         }
 
         /// <summary>
@@ -216,30 +255,6 @@ namespace BottomUpZipper
             if (Directory.Exists(folderPath))
             {
                 Directory.Delete(folderPath, recursive: true);
-            }
-        }
-
-        /// <summary>
-        /// Copies a directory and all its contents recursively
-        /// </summary>
-        private void CopyDirectory(string sourceDir, string targetDir)
-        {
-            Directory.CreateDirectory(targetDir);
-
-            // Copy all files
-            foreach (string file in Directory.GetFiles(sourceDir))
-            {
-                string fileName = Path.GetFileName(file);
-                string destFile = Path.Combine(targetDir, fileName);
-                File.Copy(file, destFile, true);
-            }
-
-            // Copy all subdirectories
-            foreach (string subDir in Directory.GetDirectories(sourceDir))
-            {
-                string dirName = Path.GetFileName(subDir);
-                string destSubDir = Path.Combine(targetDir, dirName);
-                CopyDirectory(subDir, destSubDir);
             }
         }
 
