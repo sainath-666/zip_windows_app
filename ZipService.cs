@@ -61,6 +61,11 @@ namespace BottomUpZipper
                 {
                     try
                     {
+                        if (!HasManifestFiles(directory.FullName))
+                        {
+                            continue;
+                        }
+
                         string folderName = directory.Name;
                         string tempZipPath = Path.Combine(tempDir, Guid.NewGuid().ToString() + ".zip");
 
@@ -116,6 +121,30 @@ namespace BottomUpZipper
 
             RaiseStatusChanged("All folders processed successfully!");
             RaiseOperationChanged("");
+        }
+
+        /// <summary>
+        /// Checks if the folder contains the required manifest files
+        /// </summary>
+        private bool HasManifestFiles(string folderPath)
+        {
+            try
+            {
+                var files = Directory.GetFiles(folderPath)
+                                   .Select(Path.GetFileName)
+                                   .Where(f => f != null)
+                                   .Select(f => f!.ToLower())
+                                   .ToHashSet();
+
+                bool hasInit = files.Contains("__init__.py") || files.Contains("_init.py");
+                bool hasManifest = files.Contains("__manifest__.py") || files.Contains("__manifest_.py");
+
+                return hasInit && hasManifest;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>
@@ -217,18 +246,18 @@ namespace BottomUpZipper
                     }
                     else
                     {
-                        // This subfolder wasn't processed (shouldn't happen in bottom-up, but handle it)
-                        // Add files from this subdirectory directly
-                        AddDirectoryToArchive(archive, subDirPath, subDirName);
+                        // This subfolder wasn't processed (manifest missing)
+                        // Add files from this subdirectory recursively, checking for nested zips down the line
+                        AddDirectoryToArchive(archive, subDirPath, subDirName, folderToZipMap);
                     }
                 }
             }
         }
 
         /// <summary>
-        /// Recursively adds a directory and its contents to a zip archive
+        /// Recursively adds a directory and its contents to a zip archive, respecting nested zips in the map
         /// </summary>
-        private void AddDirectoryToArchive(ZipArchive archive, string sourcePath, string entryPrefix)
+        private void AddDirectoryToArchive(ZipArchive archive, string sourcePath, string entryPrefix, Dictionary<string, string> folderToZipMap)
         {
             // Add all files
             foreach (string filePath in Directory.GetFiles(sourcePath))
@@ -242,8 +271,20 @@ namespace BottomUpZipper
             foreach (string subDirPath in Directory.GetDirectories(sourcePath))
             {
                 string subDirName = Path.GetFileName(subDirPath);
-                string newPrefix = Path.Combine(entryPrefix, subDirName);
-                AddDirectoryToArchive(archive, subDirPath, newPrefix);
+                
+                // Check if this subfolder is a pre-zipped module
+                if (folderToZipMap.TryGetValue(subDirPath, out string? childZipPath) && File.Exists(childZipPath))
+                {
+                    // Add the zip file
+                    string entryName = Path.Combine(entryPrefix, subDirName + ".zip").Replace('\\', '/');
+                    archive.CreateEntryFromFile(childZipPath, entryName, CompressionLevel.Optimal);
+                }
+                else
+                {
+                    // Recurse as logical folder
+                    string newPrefix = Path.Combine(entryPrefix, subDirName);
+                    AddDirectoryToArchive(archive, subDirPath, newPrefix, folderToZipMap);
+                }
             }
         }
 
