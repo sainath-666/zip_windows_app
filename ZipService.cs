@@ -63,6 +63,9 @@ namespace BottomUpZipper
                     {
                         if (!HasManifestFiles(directory.FullName))
                         {
+                            // Even if we skip zipping, we count it as processed so the progress bar is accurate
+                            processedFolders++;
+                            RaiseProgressChanged(processedFolders, totalFolders);
                             continue;
                         }
 
