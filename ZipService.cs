@@ -139,10 +139,12 @@ namespace BottomUpZipper
                                    .Select(f => f!.ToLower())
                                    .ToHashSet();
 
-                bool hasInit = files.Contains("__init__.py") || files.Contains("_init.py");
-                bool hasManifest = files.Contains("__manifest__.py") || files.Contains("__manifest_.py");
+                // Check for manifest files (standard __manifest__.py or user-specified variants)
+                bool hasManifest = files.Contains("__manifest__.py") || 
+                                   files.Contains("__manifest_.py") || 
+                                   files.Contains("_manifest.py");
 
-                return hasInit && hasManifest;
+                return hasManifest;
             }
             catch
             {
